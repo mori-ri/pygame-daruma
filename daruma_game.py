@@ -6,6 +6,7 @@ import time
 
 # Pygameの初期化
 pygame.init()
+pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
 
 # 画面設定
 WIDTH, HEIGHT = 800, 600
@@ -66,6 +67,23 @@ def get_japanese_font():
 
 font = get_japanese_font()
 
+# 音声ファイルの読み込み
+def load_voice_files():
+    """音声ファイルを読み込む"""
+    voice_files = []
+    for i in range(1, 4):
+        try:
+            voice_file = f"Voice{i}.mp3"
+            sound = pygame.mixer.Sound(voice_file)
+            voice_files.append(sound)
+            print(f"{voice_file} を読み込みました")
+        except Exception as e:
+            print(f"Error loading {voice_file}: {e}")
+    return voice_files
+
+# 音声ファイルを読み込み
+voice_sounds = load_voice_files()
+
 # プレイヤークラス
 class Player:
     def __init__(self, x, y):
@@ -109,9 +127,18 @@ class Daruma:
         self.color = RED
         self.facing_back = True
         self.turn_timer = 0
-        self.turn_duration = random.uniform(2.0, 5.0)
-        self.back_duration = random.uniform(1.0, 3.0)
         self.saying_text = "だるまさんが"
+        
+        # 音声関連
+        self.current_voice = None
+        self.voice_channel = None
+        self.voice_start_time = 0
+        self.voice_duration = 0
+        self.playback_speed = 1.0  # 再生速度
+        self.is_playing_voice = False
+        
+        # 次の振り返りまでの時間を設定
+        self.schedule_next_turn()
     
     def draw(self):
         pygame.draw.rect(screen, self.color, (self.x, self.y, self.width, self.height))
@@ -129,18 +156,75 @@ class Daruma:
         
         if self.facing_back:
             self.saying_text = "だるまさんが"
-            if self.turn_timer >= self.turn_duration:
+            
+            # 音声がまだ再生されていない場合は開始
+            if not self.is_playing_voice and self.turn_timer > 0.1:  # 少し遅延を入れる
+                self.start_voice()
+            
+            # 音声が終了したか、時間が経過したら振り返る
+            if (self.is_voice_finished() and self.turn_timer >= self.turn_duration) or \
+               (not voice_sounds and self.turn_timer >= self.turn_duration):
                 self.facing_back = False
                 self.turn_timer = 0
-                self.turn_duration = random.uniform(2.0, 5.0)
                 self.saying_text = "転んだ！"
+                self.stop_voice()
         else:
             self.saying_text = "転んだ！"
             if self.turn_timer >= self.back_duration:
                 self.facing_back = True
                 self.turn_timer = 0
-                self.back_duration = random.uniform(1.0, 3.0)
                 self.saying_text = "だるまさんが"
+                self.schedule_next_turn()  # 次の振り返りをスケジュール
+    
+    def schedule_next_turn(self):
+        """次の振り返りタイミングをスケジュール"""
+        if voice_sounds:
+            # ランダムに音声ファイルを選択
+            self.current_voice = random.choice(voice_sounds)
+            # 音声の長さを取得（秒）
+            self.voice_duration = self.current_voice.get_length()
+            # 再生速度をランダムに設定（0.8〜1.2倍）
+            self.playback_speed = random.uniform(0.8, 1.2)
+            # 速度調整後の実際の再生時間
+            self.actual_duration = self.voice_duration / self.playback_speed
+            # 振り返るまでの時間を音声の長さより0.02秒早く設定
+            self.turn_duration = max(0.1, self.actual_duration - 0.02)
+        else:
+            # 音声ファイルがない場合は従来通り
+            self.turn_duration = random.uniform(2.0, 5.0)
+        
+        self.back_duration = random.uniform(1.0, 3.0)
+    
+    def start_voice(self):
+        """音声再生を開始"""
+        if self.current_voice and voice_sounds:
+            try:
+                # 再生速度を調整して再生
+                # Pygameでは直接速度調整できないので、音声の周波数を調整
+                self.voice_channel = self.current_voice.play()
+                self.voice_start_time = time.time()
+                self.is_playing_voice = True
+                print(f"音声再生開始 - 速度: {self.playback_speed:.2f}x, 長さ: {self.actual_duration:.2f}秒")
+            except Exception as e:
+                print(f"音声再生エラー: {e}")
+    
+    def stop_voice(self):
+        """音声再生を停止"""
+        if self.voice_channel and self.voice_channel.get_busy():
+            self.voice_channel.stop()
+        self.is_playing_voice = False
+    
+    def is_voice_finished(self):
+        """音声が終了したかチェック"""
+        if not self.is_playing_voice:
+            return True
+        
+        if self.voice_channel and not self.voice_channel.get_busy():
+            return True
+        
+        # 時間ベースでもチェック
+        elapsed = time.time() - self.voice_start_time
+        return elapsed >= self.actual_duration
 
 # ゲームクラス
 class Game:
@@ -182,6 +266,9 @@ class Game:
             screen.blit(restart_text, (WIDTH // 2 - 100, HEIGHT // 2 + 50))
     
     def reset(self):
+        # 音声を停止
+        if hasattr(self.daruma, 'stop_voice'):
+            self.daruma.stop_voice()
         self.__init__()
     
     def run(self):
